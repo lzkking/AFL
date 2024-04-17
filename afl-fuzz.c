@@ -7747,7 +7747,7 @@ static char** get_qemu_argv(u8* own_loc, char** argv, int argc) {
 
 /* Make a copy of the current command line. */
 
-static void save_cmdline(u32 argc, char** argv) {
+static void   save_cmdline(u32 argc, char** argv) {
 
   u32 len = 1, i;
   u8* buf;
@@ -7790,12 +7790,16 @@ int main(int argc, char** argv) {
   struct timeval tv;
   struct timezone tz;
 
+  //  SAYF实际就是printf的別称
   SAYF(cCYA "afl-fuzz " cBRI VERSION cRST " by <lcamtuf@google.com>\n");
 
+  //  doc_path指向的文件夹保存的文件目前不知用途
   doc_path = access(DOC_PATH, F_OK) ? "docs" : DOC_PATH;
 
+  //  生成随机种子
   gettimeofday(&tv, &tz);
   srandom(tv.tv_sec ^ tv.tv_usec ^ getpid());
+
 
   while ((opt = getopt(argc, argv, "+i:o:f:m:b:t:T:dnCB:S:M:x:QV")) > 0)
 
@@ -7803,7 +7807,11 @@ int main(int argc, char** argv) {
 
       case 'i': /* input dir */
 
-        if (in_dir) FATAL("Multiple -i options not supported");
+        if (in_dir) {
+          FATAL("Multiple -i options not supported");
+        }
+
+        //  optarg指向选项后的参数，是个标准库的全局变量
         in_dir = optarg;
 
         if (!strcmp(in_dir, "-")) in_place_resume = 1;
@@ -7812,7 +7820,11 @@ int main(int argc, char** argv) {
 
       case 'o': /* output dir */
 
-        if (out_dir) FATAL("Multiple -o options not supported");
+        if (out_dir) {
+          FATAL("Multiple -o options not supported");
+        }
+
+        //  结果的输出保存的位置
         out_dir = optarg;
         break;
 
@@ -7988,18 +8000,31 @@ int main(int argc, char** argv) {
 
     }
 
+  //  optind是当前已经处理的参数，一般在末尾有待执行的程序，所以optind==argc说明没有带执行程序，所以格式不对退出
   if (optind == argc || !in_dir || !out_dir) usage(argv[0]);
 
+  //  为不同的信号设置不同的处理程序
+  //  设置了：
+  //    停止信号的处理程序：  handle_stop_sig
+  //    超时通知的处理程序：  handle_timeout
+  //    窗口大小改变的处理程序：  handle_resize
+  //    跳过信号的处理程序：  handle_skipreq
   setup_signal_handlers();
+
+  //  用于检查环境变量：
+  //    ASAN_OPTIONS、MSAN_OPTIONS
+  //    具体用处目前不知道
   check_asan_opts();
 
+  //  用于协调多台计算机运行afl-fuzz实例使用，防止重复测试文件
   if (sync_id) fix_up_sync();
 
+  //  输入文件和输出文件不能相同
   if (!strcmp(in_dir, out_dir))
     FATAL("Input and output directories can't be the same");
 
+  //  互斥的选项
   if (dumb_mode) {
-
     if (crash_mode) FATAL("-C and -n are mutually exclusive");
     if (qemu_mode)  FATAL("-Q and -n are mutually exclusive");
 
@@ -8010,6 +8035,7 @@ int main(int argc, char** argv) {
   if (getenv("AFL_NO_ARITH"))      no_arith         = 1;
   if (getenv("AFL_SHUFFLE_QUEUE")) shuffle_queue    = 1;
   if (getenv("AFL_FAST_CAL"))      fast_cal         = 1;
+
 
   if (getenv("AFL_HANG_TMOUT")) {
     hang_tmout = atoi(getenv("AFL_HANG_TMOUT"));
@@ -8027,39 +8053,75 @@ int main(int argc, char** argv) {
   if (getenv("AFL_LD_PRELOAD"))
     FATAL("Use AFL_PRELOAD instead of AFL_LD_PRELOAD");
 
+  //  保存命令
   save_cmdline(argc, argv);
 
+  //  修改显示的运行文件名
   fix_up_banner(argv[optind]);
 
+  //  检查是否在终端运行，假如不在终端运行会减少部分UI输出
   check_if_tty();
 
+  //  依据系统不同获取系统的cpu核心数，与多线程有关
   get_core_count();
 
+
 #ifdef HAVE_AFFINITY
+  //  独占空闲的cpu
   bind_to_free_cpu();
 #endif /* HAVE_AFFINITY */
 
+  //  检查系统是否配置了将核心转储（core dump）通知发送到外部程序。
+  //  在某些系统上，当程序崩溃时，系统会将核心转储信息发送给一个外部程序来处理，
+  //  这可能会导致模糊测试工具无法立即获取到崩溃的信息，从而影响测试效果。
   check_crash_handling();
+
+  //  用于检查系统的 CPU 调频策略（CPU governor）。
+  //  在某些系统上，CPU 的频率会根据需要进行动态调整，
+  //  以节省能源或提高性能。然而，这种动态调频策略可能会影响模糊测试的效果，
+  //  因为系统可能无法及时将 CPU 的频率提高到最高以处理模糊测试中的短暂进程
   check_cpu_governor();
 
+  //  后处理器：
+  //    不知道用处
   setup_post();
+
+  //  设置共享内存
   setup_shm();
+
+  //  不知道
   init_count_class16();
 
+  //  创建输出文件夹
   setup_dirs_fds();
+
+  //  这段代码的作用是从输入目录中读取所有测试用例，
+  //  并将它们加入到测试队列中，用于后续的测试。具体步骤如下
   read_testcases();
+  
+  //  这段代码的目的是在程序启动时加载自动生成的额外字典文件，
+  //  以便后续的模糊测试中可以使用这些额外的字典内容
   load_auto();
 
+  //  这段代码的目的是在输出目录中创建硬链接，
+  //  以便在模糊测试期间可以使用这些硬链接指向的输入文件。
+  //  这样可以减少磁盘空间的使用，并且可以更好地管理和组织测试案例。
   pivot_inputs();
 
   if (extras_dir) load_extras(extras_dir);
 
   if (!timeout_given) find_timeout();
 
+
+  //这段代码的作用是检测命令行参数中是否包含 "@@"
   detect_file_args(argv + optind + 1);
+
 
   if (!out_file) setup_stdio_file();
 
+
+  //  检查二进制文件的可执行性，
+  //    包括是否插桩
   check_binary(argv[optind]);
 
   start_time = get_cur_time();
@@ -8068,6 +8130,7 @@ int main(int argc, char** argv) {
     use_argv = get_qemu_argv(argv[0], argv + optind, argc - optind);
   else
     use_argv = argv + optind;
+
 
   perform_dry_run(use_argv);
 
